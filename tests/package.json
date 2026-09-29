@@ -1,0 +1,14 @@
+{
+  "name": "zitationspruefer-tests",
+  "private": true,
+  "description": "Testumgebung für den Zitationsprüfer (lokale Kopien der CDN-Bibliotheken und Ende-zu-Ende-Test)",
+  "type": "module",
+  "scripts": {
+    "samples": "python3 make_samples.py",
+    "test": "node e2e.mjs"
+  },
+  "devDependencies": {
+    "jszip": "3.10.1",
+    "pdfjs-dist": "3.11.174"
+  }
+}
