@@ -82,6 +82,7 @@ section { display: grid; gap: 1rem; min-width: 0; }
 .btn.small { padding: 0.25rem 0.6rem; }
 .btn[disabled] { opacity: 0.45; cursor: default; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+input.visually-hidden:focus-visible + label.btn { outline: 2px solid var(--focus); outline-offset: 2px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 .drop {
@@ -140,6 +141,7 @@ td.num { white-space: nowrap; }
 
 .results { list-style: none; padding: 0; display: grid; gap: 1.25rem; }
 .card {
+  position: relative;
   border: 1px solid var(--line);
   border-radius: 4px;
   padding: 1rem 1.25rem;
@@ -185,8 +187,8 @@ td.num { white-space: nowrap; }
     <div class="step-body">
       <p>Word-Datei (.docx) oder PDF. Word ist genauer, weil Blockzitate dort an der Einrückung erkannt werden.</p>
       <div class="row">
-        <label class="btn primary" for="thesis-file">Arbeit auswählen</label>
         <input class="visually-hidden" type="file" id="thesis-file" accept=".docx,.pdf,.txt">
+        <label class="btn primary" for="thesis-file">Arbeit auswählen</label>
         <span class="status-line" id="thesis-status" aria-live="polite"></span>
       </div>
       <details id="paste-box">
@@ -206,8 +208,8 @@ td.num { white-space: nowrap; }
     <div class="step-body">
       <div class="drop" id="drop">
         <p>PDFs der Bücher und Artikel. Du kannst mehrere auf einmal auswählen oder hierher ziehen.</p>
-        <label class="btn primary" for="source-files">PDFs auswählen</label>
         <input class="visually-hidden" type="file" id="source-files" accept=".pdf,application/pdf" multiple>
+        <label class="btn primary" for="source-files">PDFs auswählen</label>
       </div>
       <label class="check"><input type="checkbox" id="remember" checked> <span>Quellen in diesem Browser speichern, damit du sie beim nächsten Öffnen nicht erneut auswählen musst. Die Dateien bleiben auf deinem Gerät.</span></label>
       <p class="status-line" id="source-status" aria-live="polite"></p>
@@ -237,6 +239,12 @@ td.num { white-space: nowrap; }
   <section aria-labelledby="h-results">
     <div class="step-head"><span class="step-no">4</span><h2 id="h-results">Ergebnis</h2></div>
     <div class="step-body">
+      <div class="row">
+        <input class="visually-hidden" type="file" id="update-file" accept=".docx,.pdf,.txt">
+        <label class="btn primary" for="update-file">Aktualisieren</label>
+        <span>Neue Fassung deiner Arbeit auswählen, zum Beispiel nach Korrekturen. Quellen und Zuordnungen bleiben erhalten.</span>
+      </div>
+      <p id="update-status" aria-live="polite" hidden></p>
       <div class="summary" id="summary" aria-live="polite"></div>
       <div class="filters" id="filters" role="toolbar" aria-label="Ergebnisse filtern"></div>
       <label for="search" class="visually-hidden">Ergebnisse durchsuchen</label>
@@ -1382,6 +1390,7 @@ const state = {
   filter: 'alle',
   query: '',
   busy: false,
+  justUpdated: null,
 };
 window.__zitationspruefer = state;
 
@@ -1562,6 +1571,7 @@ function evalQuote(res, src) {
         res.msg += ` Die angegebene ${cited} ist unten zum Nachlesen abgebildet.`;
         for (let i = region.lo; i <= Math.min(region.hi, region.lo + 2); i++) res.pages.push({ pi: i, marks: [] });
       } else if (c.pages) {
+        res.pdfMayHelp = true;
         res.msg += ` Die angegebene ${cited} ist in der PDF nicht enthalten (sie umfasst ${fileSpanLabel(src)}).`;
       }
     }
@@ -1624,6 +1634,7 @@ function evalQuote(res, src) {
       break;
     case 'nichtInDatei':
       res.status = 'seite';
+      res.pdfMayHelp = true;
       res.msg = `${wortlaut} auf ${found}. Die angegebene ${cited} ist in der PDF nicht enthalten (sie umfasst ${fileSpanLabel(src)}).`;
       break;
     case 'locator':
@@ -1657,6 +1668,7 @@ function evalPara(res, src) {
   const region = citedRegion(src, c.pages);
   if (!region.ok) {
     res.status = 'seite';
+    res.pdfMayHelp = true;
     res.msg = `Die angegebene ${cited} ist in der PDF nicht enthalten (sie umfasst ${fileSpanLabel(src)}).`;
     return res;
   }
@@ -1790,9 +1802,24 @@ async function runAll() {
   setBusy(false);
 }
 
+const PROBLEM_STATUS = ['abw', 'seite', 'fehlt'];
+function tally(results) {
+  return { problems: results.filter(r => PROBLEM_STATUS.includes(r.status)).length, ok: results.filter(r => r.status === 'ok').length };
+}
+function setUpdateStatus(text) {
+  const el = $('#update-status');
+  el.textContent = text || '';
+  el.hidden = !text;
+}
+function clockTime() {
+  try { return new Date().toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }); } catch { return ''; }
+}
+
 async function onThesisFile(file) {
   const status = $('#thesis-status');
+  const prev = state.thesis && !state.thesis.demo && state.results.length ? { ...tally(state.results), name: state.thesis.name } : null;
   status.textContent = `Lese ${file.name} …`;
+  if (prev) setUpdateStatus(`Lese ${file.name} …`);
   try {
     const buf = await file.arrayBuffer();
     let paras;
@@ -1802,12 +1829,56 @@ async function onThesisFile(file) {
     else if (/\.doc$/i.test(file.name)) throw new Error('Das alte Word-Format .doc wird nicht unterstützt. Speichere die Arbeit in Word bitte als .docx.');
     else throw new Error('Bitte eine .docx-, .pdf- oder .txt-Datei auswählen.');
     exitDemo();
+    state.justUpdated = null;
     state.thesis = buildThesis(file.name, paras);
     await runAll();
+    if (prev) {
+      const now = tally(state.results);
+      setUpdateStatus(`Aktualisiert mit ${file.name} um ${clockTime()} Uhr. Probleme vorher ${prev.problems}, jetzt ${now.problems}. Bestätigt vorher ${prev.ok}, jetzt ${now.ok}.`);
+    } else setUpdateStatus('');
   } catch (err) {
     console.error(err);
     status.textContent = `${file.name} konnte nicht gelesen werden: ${err.message}`;
+    if (prev) setUpdateStatus(`${file.name} konnte nicht gelesen werden: ${err.message}`);
   }
+}
+
+/* Aktualisieren auf einer Karte: PDF für genau dieses Werk wählen und neu prüfen */
+async function updateWorkPdf(r, file) {
+  if (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf') { setUpdateStatus('Bitte eine PDF-Datei auswählen.'); return; }
+  const work = r.work;
+  const all = store.get('zp.assign.v1', {});
+  all[work.sig] = file.name;
+  store.set('zp.assign.v1', all);
+  const id = `${file.name}|${file.size}`;
+  const known = state.sources.some(s => s.id === id);
+  state.justUpdated = { id: r.id, msg: `Gerade aktualisiert: jetzt mit ${file.name} geprüft.` };
+  if (known) await runAll(); else await addSourceFiles([file]);
+  if (!state.sources.some(s => s.id === id)) {
+    state.justUpdated = null;
+    renderResults();
+    setUpdateStatus(`${file.name} konnte nicht gelesen werden. Details stehen unter 2.`);
+    return;
+  }
+  const after = state.results.find(x => x.id === r.id);
+  const same = state.results.filter(x => x.work && x.work.sig === work.sig);
+  setUpdateStatus(`Aktualisiert um ${clockTime()} Uhr: ${work.display} wird jetzt mit ${file.name} geprüft. ${same.length} ${same.length === 1 ? 'Beleg' : 'Belege'} dieses Werks neu geprüft${after ? `, dieser Beleg: ${(STATUS[after.status] || STATUS.fehlt).label}` : ''}.`);
+  focusCard(r.id);
+}
+
+function focusCard(id) {
+  let el = document.getElementById(`beleg-${id}`);
+  if (!el) {
+    state.filter = 'alle';
+    state.query = '';
+    $('#search').value = '';
+    renderResults();
+    el = document.getElementById(`beleg-${id}`);
+  }
+  if (!el) return;
+  const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  el.scrollIntoView({ block: 'start', behavior: reduce ? 'auto' : 'smooth' });
+  el.focus({ preventScroll: true });
 }
 
 async function addSourceFiles(files) {
@@ -2014,10 +2085,12 @@ function renderCard(r) {
   add('Abweichungen', r.deviations);
   add('Hinweise', r.hints);
   add('Werk', r.work ? `${r.work.display}${r.src ? `, ${r.src.name}` : ''}` : '');
-  const card = h('li', { class: 'card', id: `beleg-${r.id}` },
+  const updated = state.justUpdated && state.justUpdated.id === r.id;
+  const card = h('li', { class: 'card', id: `beleg-${r.id}`, tabindex: updated ? '-1' : null },
     h('div', { class: 'card-head' },
       h('span', { class: 'status' }, h('span', { class: 'sym', 'aria-hidden': 'true', text: st.sym }), st.label),
       h('span', { text: `Absatz ${r.cite.para + 1}` })),
+    updated ? h('p', { text: state.justUpdated.msg }) : null,
     kv);
   if (r.src && r.pages.length) {
     const box = h('div', { class: 'pages', hidden: true });
@@ -2050,6 +2123,15 @@ function renderCard(r) {
       box.replaceChildren(...figs);
     });
     card.append(h('div', { class: 'row' }, btn), box);
+  }
+  if (!state.demo && r.work && (r.status === 'fehlt' || r.status === 'ohnepdf' || r.pdfMayHelp)) {
+    const inputId = `aktualisieren-${r.id}`;
+    const input = h('input', { class: 'visually-hidden', type: 'file', id: inputId, accept: '.pdf,application/pdf' });
+    input.addEventListener('change', () => { const f = input.files[0]; input.value = ''; if (f) updateWorkPdf(r, f); });
+    card.append(h('div', { class: 'row' },
+      input,
+      h('label', { class: 'btn small', for: inputId, text: 'Aktualisieren' }),
+      h('span', { text: r.src ? `Andere PDF für ${r.work.display} auswählen, danach wird neu geprüft.` : `PDF für ${r.work.display} auswählen, danach wird neu geprüft.` })));
   }
   return card;
 }
@@ -2094,7 +2176,7 @@ const DEMO_THESIS = [
   'Beispiel, M. (2019). Digitale Öffentlichkeiten und organisationale Sichtbarkeit. Zeitschrift für Beispielforschung, 7(2), 41–44.',
   'Muster, A. (2021). Grundlagen der Organisationskommunikation. Beispielverlag.',
 ].join('\n\n');
-const DEMO_PDF_B64 = /*DEMO_PDF_BEGIN*/'JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9jdW1lbnQgKG9wZW5zb3VyY2UpCjEgMCBvYmoKPDwKL0YxIDIgMCBSIC9GMiAzIDAgUiAvRjMgNCAwIFIKPj4KZW5kb2JqCjIgMCBvYmoKPDwKL0Jhc2VGb250IC9IZWx2ZXRpY2EgL0VuY29kaW5nIC9XaW5BbnNpRW5jb2RpbmcgL05hbWUgL0YxIC9TdWJ0eXBlIC9UeXBlMSAvVHlwZSAvRm9udAo+PgplbmRvYmoKMyAwIG9iago8PAovQmFzZUZvbnQgL1RpbWVzLUJvbGQgL0VuY29kaW5nIC9XaW5BbnNpRW5jb2RpbmcgL05hbWUgL0YyIC9TdWJ0eXBlIC9UeXBlMSAvVHlwZSAvRm9udAo+PgplbmRvYmoKNCAwIG9iago8PAovQmFzZUZvbnQgL1RpbWVzLVJvbWFuIC9FbmNvZGluZyAvV2luQW5zaUVuY29kaW5nIC9OYW1lIC9GMyAvU3VidHlwZSAvVHlwZTEgL1R5cGUgL0ZvbnQKPj4KZW5kb2JqCjUgMCBvYmoKPDwKL0NvbnRlbnRzIDEzIDAgUiAvTWVkaWFCb3ggWyAwIDAgNDE5LjUyNzYgNTk1LjI3NTYgXSAvUGFyZW50IDEyIDAgUiAvUmVzb3VyY2VzIDw8Ci9Gb250IDEgMCBSIC9Qcm9jU2V0IFsgL1BERiAvVGV4dCAvSW1hZ2VCIC9JbWFnZUMgL0ltYWdlSSBdCj4+IC9Sb3RhdGUgMCAvVHJhbnMgPDwKCj4+IAogIC9UeXBlIC9QYWdlCj4+CmVuZG9iago2IDAgb2JqCjw8Ci9Db250ZW50cyAxNCAwIFIgL01lZGlhQm94IFsgMCAwIDQxOS41Mjc2IDU5NS4yNzU2IF0gL1BhcmVudCAxMiAwIFIgL1Jlc291cmNlcyA8PAovRm9udCAxIDAgUiAvUHJvY1NldCBbIC9QREYgL1RleHQgL0ltYWdlQiAvSW1hZ2VDIC9JbWFnZUkgXQo+PiAvUm90YXRlIDAgL1RyYW5zIDw8Cgo+PiAKICAvVHlwZSAvUGFnZQo+PgplbmRvYmoKNyAwIG9iago8PAovQ29udGVudHMgMTUgMCBSIC9NZWRpYUJveCBbIDAgMCA0MTkuNTI3NiA1OTUuMjc1NiBdIC9QYXJlbnQgMTIgMCBSIC9SZXNvdXJjZXMgPDwKL0ZvbnQgMSAwIFIgL1Byb2NTZXQgWyAvUERGIC9UZXh0IC9JbWFnZUIgL0ltYWdlQyAvSW1hZ2VJIF0KPj4gL1JvdGF0ZSAwIC9UcmFucyA8PAoKPj4gCiAgL1R5cGUgL1BhZ2UKPj4KZW5kb2JqCjggMCBvYmoKPDwKL0NvbnRlbnRzIDE2IDAgUiAvTWVkaWFCb3ggWyAwIDAgNDE5LjUyNzYgNTk1LjI3NTYgXSAvUGFyZW50IDEyIDAgUiAvUmVzb3VyY2VzIDw8Ci9Gb250IDEgMCBSIC9Qcm9jU2V0IFsgL1BERiAvVGV4dCAvSW1hZ2VCIC9JbWFnZUMgL0ltYWdlSSBdCj4+IC9Sb3RhdGUgMCAvVHJhbnMgPDwKCj4+IAogIC9UeXBlIC9QYWdlCj4+CmVuZG9iago5IDAgb2JqCjw8Ci9Db250ZW50cyAxNyAwIFIgL01lZGlhQm94IFsgMCAwIDQxOS41Mjc2IDU5NS4yNzU2IF0gL1BhcmVudCAxMiAwIFIgL1Jlc291cmNlcyA8PAovRm9udCAxIDAgUiAvUHJvY1NldCBbIC9QREYgL1RleHQgL0ltYWdlQiAvSW1hZ2VDIC9JbWFnZUkgXQo+PiAvUm90YXRlIDAgL1RyYW5zIDw8Cgo+PiAKICAvVHlwZSAvUGFnZQo+PgplbmRvYmoKMTAgMCBvYmoKPDwKL1BhZ2VNb2RlIC9Vc2VOb25lIC9QYWdlcyAxMiAwIFIgL1R5cGUgL0NhdGFsb2cKPj4KZW5kb2JqCjExIDAgb2JqCjw8Ci9BdXRob3IgKEFubmEgTXVzdGVyKSAvQ3JlYXRpb25EYXRlIChEOjIwMjYwOTI5MTYzMjAxKzAwJzAwJykgL0NyZWF0b3IgKGFub255bW91cykgL0tleXdvcmRzICgpIC9Nb2REYXRlIChEOjIwMjYwOTI5MTYzMjAxKzAwJzAwJykgL1Byb2R1Y2VyIChSZXBvcnRMYWIgUERGIExpYnJhcnkgLSBcKG9wZW5zb3VyY2VcKSkgCiAgL1N1YmplY3QgKHVuc3BlY2lmaWVkKSAvVGl0bGUgKEdydW5kbGFnZW4gZGVyIE9yZ2FuaXNhdGlvbnNrb21tdW5pa2F0aW9uKSAvVHJhcHBlZCAvRmFsc2UKPj4KZW5kb2JqCjEyIDAgb2JqCjw8Ci9Db3VudCA1IC9LaWRzIFsgNSAwIFIgNiAwIFIgNyAwIFIgOCAwIFIgOSAwIFIgXSAvVHlwZSAvUGFnZXMKPj4KZW5kb2JqCjEzIDAgb2JqCjw8Ci9GaWx0ZXIgWyAvQVNDSUk4NURlY29kZSAvRmxhdGVEZWNvZGUgXSAvTGVuZ3RoIDMwMQo+PgpzdHJlYW0KR2FyVzNdaFpJIShlKzBfYD5zTkdxIiU7QE4pWk4mKztSYi8tKSsvci0/NHMtb19FSjk8QzdMKFpLKk9uVU42YCgqUW4rWCYkLj8oMlpzYnQlN2kyV3FoZiR1Yi4uS2UzTm5nW2s0RkclNjg6YzpUUy1wT2VFTGIwXTtIM1RdTTY8LWldWldMcDBpdDtCOkwpRi9EdWIkUzgvNEBCIjQwZUtsJ29bPmVwJyFHXEw0IzZXUmM1KDNGRS1hJ0JfYDpsa1NlTEEnIWc7dCtYUWgwTVgoamRDLjdWSWchRyQtP2dkQ1pnSkpHTVVCW0EtXXBTL14iYTBSKmdVVWBILSVaZ1gyVzUvcUVFNEZlKG5rLjgoRSlgZGVSYXJebjltM0dlXT5gcCpkYjJLNzF+PmVuZHN0cmVhbQplbmRvYmoKMTQgMCBvYmoKPDwKL0ZpbHRlciBbIC9BU0NJSTg1RGVjb2RlIC9GbGF0ZURlY29kZSBdIC9MZW5ndGggODA2Cj4+CnN0cmVhbQpHYXMxXWJBUSZnJkE3MFZwPUwuWy5aJzw+KnRwSiJKSk1wXSNYJj0pZC5VKEAsPmVYZTI7a1wsWHMxbyZEJkVOZE87KT4/QjRkUHM5WVktOWh0LXBDJ24ja0A1YSJINjZdc2tVPDhaWi5cZig1R1BZalVjYCkxaEE4MSc6ay4mLz1IK1lRNkowKEsoRCpvP2leaixFVy82JD0iYmRGdUYrJURJVl8yY0xtVVRbU2ZGTzJ1U1RIKCg/aiReY0whL1hoMF82XG91NEsocmFtV0tpYEQlR0pOKUlJRlJpKS0/aTonQVcia2dNJ1ZsLGFYZVUxLEFCaFlSXydNWGdIZmglVEV0MFk/Y3FEaFA5XmsiQV1BO1I6ZXQoZ2FddUBsImVwRClzRXF1SypMYk5oJjN0QUQuRUtdYTdBRXVwQmlNO2dOaVFWZCRATlxZbHNHJ1hNYztlJzVZLGo9W2twZGk+SW46XV8iP0JOVi1EJXI0bEpQMHInZyRRKlRJTWt0J1NqQzFXQTM/O1A/XHA9O2dLXWsmXkYyTD0kVylNPWYoU20oI0RYbGcoZk1tKnFXVk5uUUEjLlomLiRNSTBDaSU8U0k7WyhEbFRIOSdYVyMrTUhwaD5IYiJfdGJAJyJIMSZwLjBkRkIxV3VrOmUxNz5YPGw5ZVxxciY3J0llaUxpOT9mQSdFSVFfbkxRLUxZWWddN0NcU1sibzFlRk1PMDQ/bGI1PXFMU3NCVmZRXE5WdSlRPGoyXTtCW2hTMG1EaiZxamJSWU1fJyMxUlhjL2o4bk4wb2I4QyNGLkY2SEdaKWcvTFovaTVXPV8+VGpjcVRIP3RtZm4zZjtVJ2M/LkQ/QzFlUU1KPEhfMCVHLE89bCQ+JWtDXmtmNUQkISpAPU5Vb0VYYFRWQU9vMi5iSUZ0NVxJMkVMNC5IYWdZNmA4K0trYGxdMSVnZCpEQFhCJVJsbUtQTFUqc2M2aV9fWVdMNl1cZV4tV0otYlMwITNaYE1XUSo/ZmIoOGNzZDxObT05KmpuLCgwa08yUm1NXlY9ZyNwTEZRUEMqdHRMUlokZkcwLTZ+PmVuZHN0cmVhbQplbmRvYmoKMTUgMCBvYmoKPDwKL0ZpbHRlciBbIC9BU0NJSTg1RGVjb2RlIC9GbGF0ZURlY29kZSBdIC9MZW5ndGggODEyCj4+CnN0cmVhbQpHYXMxXWdNWUoqJ1JdJ29jNkp1a2liUCZTLmJaKCEhZUkkdUlHKVFacDYsKTBnLlIlZ291cmwzRyNfRi9NWDRYO2JhRmw/MlBwWSxuYkJsYE0oVTwpSFE/JVQ6dDhDNDcyXSp0bClLJWFZLD41Z3E3KlxjUCVjLilARGtTUEFVLWptT1tkR0owPCIxI2pZJk87I2dccm1aTGpdaSpQQyhwLyNuJXNvbS1mT2JeXDg6PCc4LkYoUi08QyJGSG5zP1FcXmFBUyxdMURIVCMwbUIjP247Kj5iPzYmMSMvblxGNC45cEtbcko+SGxMUiFGXTZgdFNHUmRnQFwvRSxzPClVT0xbS2BfZGpgWk42LzFaTDpwZEY9VSdbWzpJSjU5dUhDZ1pQOyktM0RuUmFHaG5QUFJ1WGo3Wy5BVjA0PWBqSTJOJDwmOSM/YnBXTVhtbm1MMjplY1ZUaV5vMzo3ITQuSitEIWwjTToqb2FbSD9WYyIzVVpgLF1NUGZMQ247XCI4ZS9cRlpVZHVtYTxZTlVKUXBTJC1eKT9IMj4mIjhsK3BKJmw0N1pNTTFeJ0xtM3VWa1FnOUZVYDU5aERGTCMjKElRNWA0QlBfKmMlOVUlSlBTUFVyK1w0OU1iSzdkLGtLZDAqK2gtSElcKUJFamkuJUAmTlY2Mic+IVNCUmk9OjpBLEFDWWE2VyVoX180LzE+Ozk7cGlCIzsyPCJhSWMqTlI+JkAyX1wiXT9UYmxaRkg0cHR0TD4sODtwUzRQT2pPRzxgZjVRckhIMilWIkdkLSthZCVZK0RWVzFnMUAwIm8oJFxsMU9rUk1JdWRcPiksPyRuUXBGPlpfZjRjNmw0UmYtcG9mXmpqI1VnQ3NJWV06I0UwSmBELSgzcmtlKltvaF4ma0dSOnEuLWZEMiRcVlxMQF5pcTg+LigsaEMmQ15SUWIqcktcOkgmTjphZU9HM0BoTk8hO1JoUz4qcUpfJFsqPmxATkFSR0BSVGAnb1ppRko/LzI4NSJuMig7WFA2IW9ecXVgU2FPSmZsLnFVVWRWJzVqLSlITylLSyhWdGtOVHJtTEUyZiV+PmVuZHN0cmVhbQplbmRvYmoKMTYgMCBvYmoKPDwKL0ZpbHRlciBbIC9BU0NJSTg1RGVjb2RlIC9GbGF0ZURlY29kZSBdIC9MZW5ndGggNjkyCj4+CnN0cmVhbQpHYXMxXT8jLzFbJjpEZy1mWjFHMVdfUFRYbm1iQi07VlkudSwoXGE/WmFIKVc1K1RvRyxgbEJqNGtYM1xmMSJWUVBCVVZeQWtpRCpJYDIjbm0vYE0xSSFIOEcxOG9DPkEwUmBIIVZjOUNHYi45ZiddWSouYWopUVgjdClxOzZsJExPby90LjtATGRNaysuZ2kqV3JhMjlnOy5dTEQ/dEVEKy8rLjdxVTVTOTBvc3NpMTtDZ107Q0pqMSUvWiJxYUVZJnJANVtcKjBYT29RInA1Z20lPTJdUEs4M2hRZVlEWyhKZGttc1swaURMUWRlcTgrakw0L2xiJklqVHBDc24lSTYsME9obi1qVy0nZTIhXkZkV10wWiI4TlxiP046YFMuQmNRPks1MmVoP0k0T15OJEdUN042RCZkMT5oSjUoJlQlSCNBQT09Qz9KUGVuND06WDIpNDEvU0xnQj8nRkoqSlI4cUlObEJhO2w7ZGFbPi07LEotMiUnKXNpKltVZFZeI2ouJmclNDc6XDNcLzFhLWcpQWdAWm9cbyIiUiJTTj9dTjdCcnBHO1dKdTdDXSw7InI1aVI7SWVBJGRqXzs6SiktUSpRKyFPWnJzVVotVXA6PXNRMGJYMUcsU0tCSE9QWV41KjRbS1ZwVy8jXzhTQTNrbVI4KVxxLkJUIzVBXFwuWjF0Rys3PlQpUTMySmJKLGcySyRpXWBSWzBERUJcXWFFXF8zOVtfclpFUGliOTYrUCpSMUsibDpCOnFgQjdtNzxBYXUkQWlEUltvZm0mOGIzaCI7dG9pWEssSVw2dGgmakdYLFY7bF5TRzZgYUlGTGZxbUdDKDpESmxHL1w6K1BGWmI4O0I+WlI2OCMsPkZba2xlTVVRc2siLiZuJE0mPCInWkZOOiVzTkwoUVRlLVZ+PmVuZHN0cmVhbQplbmRvYmoKMTcgMCBvYmoKPDwKL0ZpbHRlciBbIC9BU0NJSTg1RGVjb2RlIC9GbGF0ZURlY29kZSBdIC9MZW5ndGggNTExCj4+CnN0cmVhbQpHYXMyRjk1Zz1jJjs5Tk8nbTRWbVFuVVg3ZyJeQ1RJO3IiP25nVG8uQlNPVj1fZUw2IWFoTCJBQ0M/QWQvTDYhX2VeckAlYyZmciNjMG82RW1WNy1hQjQpVkIlXWkyLmVBJjVnWU5HakZXaGMtbUJwKCVPcDtVTFE4ckJvQGFuJGU0UFQ5QEhsWSFOW01FaEE0NCQ4W0lBJD9EajYyXyZdZitnPiVjZzM0QVFnP0lyUj9cMFJLcmM9SVIwNCUkM0FRQTAoa1BUaWlSTVY3UzQ/NVQoT0QsVSkoIUNWUGtoNkNSYSdMJV46LUYsZTZDR1BvRlgsZ1RDYzVYR1AlbzYlbjtgWEwvbm1tN2YrQENmUFZLJlVuMTpKZF1xN0g0XGlpJUVMLVhqSCVyJXMtMkxRWTRKTnVLZV9cM0NWRV1FQ2E1YDtoLWVzR09NRVJbMVNTbmlzUnNVT15cYlhsImhfK2okJ09BcGIoazNJK2Y8R1hNKypgW0FAQTo9TXEpU1NVIU9sNl5kXDBudGNPNVNUbmdGcERgRzpSKFZFKDZcJTBuITc/SyU+WkZQVjtSJlxrWmxxK2huQ1dzczU9bFxUIj9DVm5CbHBlQGJPPjl0NFlpKjtrLzhoTWM6cWZedUxqVl9aRVN0bXBAT0pkLkVgbV4xbz0rOjY4O1g1Sn4+ZW5kc3RyZWFtCmVuZG9iagp4cmVmCjAgMTgKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDYxIDAwMDAwIG4gCjAwMDAwMDAxMTIgMDAwMDAgbiAKMDAwMDAwMDIxOSAwMDAwMCBuIAowMDAwMDAwMzI3IDAwMDAwIG4gCjAwMDAwMDA0MzYgMDAwMDAgbiAKMDAwMDAwMDY0MSAwMDAwMCBuIAowMDAwMDAwODQ2IDAwMDAwIG4gCjAwMDAwMDEwNTEgMDAwMDAgbiAKMDAwMDAwMTI1NiAwMDAwMCBuIAowMDAwMDAxNDYxIDAwMDAwIG4gCjAwMDAwMDE1MzEgMDAwMDAgbiAKMDAwMDAwMTgyOCAwMDAwMCBuIAowMDAwMDAxOTEyIDAwMDAwIG4gCjAwMDAwMDIzMDQgMDAwMDAgbiAKMDAwMDAwMzIwMSAwMDAwMCBuIAowMDAwMDA0MTA0IDAwMDAwIG4gCjAwMDAwMDQ4ODcgMDAwMDAgbiAKdHJhaWxlcgo8PAovSUQgCls8MjMzNGIzOTIzMjE0MjdjY2E5MjJkNDViNDY0NWYwNDI+PDIzMzRiMzkyMzIxNDI3Y2NhOTIyZDQ1YjQ2NDVmMDQyPl0KJSBSZXBvcnRMYWIgZ2VuZXJhdGVkIFBERiBkb2N1bWVudCAtLSBkaWdlc3QgKG9wZW5zb3VyY2UpCgovSW5mbyAxMSAwIFIKL1Jvb3QgMTAgMCBSCi9TaXplIDE4Cj4+CnN0YXJ0eHJlZgo1NDg5CiUlRU9GCg=='/*DEMO_PDF_END*/;
+const DEMO_PDF_B64 = /*DEMO_PDF_BEGIN*/'JVBERi0xLjMKJZOMi54gUmVwb3J0TGFiIEdlbmVyYXRlZCBQREYgZG9jdW1lbnQgKG9wZW5zb3VyY2UpCjEgMCBvYmoKPDwKL0YxIDIgMCBSIC9GMiAzIDAgUiAvRjMgNCAwIFIKPj4KZW5kb2JqCjIgMCBvYmoKPDwKL0Jhc2VGb250IC9IZWx2ZXRpY2EgL0VuY29kaW5nIC9XaW5BbnNpRW5jb2RpbmcgL05hbWUgL0YxIC9TdWJ0eXBlIC9UeXBlMSAvVHlwZSAvRm9udAo+PgplbmRvYmoKMyAwIG9iago8PAovQmFzZUZvbnQgL1RpbWVzLUJvbGQgL0VuY29kaW5nIC9XaW5BbnNpRW5jb2RpbmcgL05hbWUgL0YyIC9TdWJ0eXBlIC9UeXBlMSAvVHlwZSAvRm9udAo+PgplbmRvYmoKNCAwIG9iago8PAovQmFzZUZvbnQgL1RpbWVzLVJvbWFuIC9FbmNvZGluZyAvV2luQW5zaUVuY29kaW5nIC9OYW1lIC9GMyAvU3VidHlwZSAvVHlwZTEgL1R5cGUgL0ZvbnQKPj4KZW5kb2JqCjUgMCBvYmoKPDwKL0NvbnRlbnRzIDEzIDAgUiAvTWVkaWFCb3ggWyAwIDAgNDE5LjUyNzYgNTk1LjI3NTYgXSAvUGFyZW50IDEyIDAgUiAvUmVzb3VyY2VzIDw8Ci9Gb250IDEgMCBSIC9Qcm9jU2V0IFsgL1BERiAvVGV4dCAvSW1hZ2VCIC9JbWFnZUMgL0ltYWdlSSBdCj4+IC9Sb3RhdGUgMCAvVHJhbnMgPDwKCj4+IAogIC9UeXBlIC9QYWdlCj4+CmVuZG9iago2IDAgb2JqCjw8Ci9Db250ZW50cyAxNCAwIFIgL01lZGlhQm94IFsgMCAwIDQxOS41Mjc2IDU5NS4yNzU2IF0gL1BhcmVudCAxMiAwIFIgL1Jlc291cmNlcyA8PAovRm9udCAxIDAgUiAvUHJvY1NldCBbIC9QREYgL1RleHQgL0ltYWdlQiAvSW1hZ2VDIC9JbWFnZUkgXQo+PiAvUm90YXRlIDAgL1RyYW5zIDw8Cgo+PiAKICAvVHlwZSAvUGFnZQo+PgplbmRvYmoKNyAwIG9iago8PAovQ29udGVudHMgMTUgMCBSIC9NZWRpYUJveCBbIDAgMCA0MTkuNTI3NiA1OTUuMjc1NiBdIC9QYXJlbnQgMTIgMCBSIC9SZXNvdXJjZXMgPDwKL0ZvbnQgMSAwIFIgL1Byb2NTZXQgWyAvUERGIC9UZXh0IC9JbWFnZUIgL0ltYWdlQyAvSW1hZ2VJIF0KPj4gL1JvdGF0ZSAwIC9UcmFucyA8PAoKPj4gCiAgL1R5cGUgL1BhZ2UKPj4KZW5kb2JqCjggMCBvYmoKPDwKL0NvbnRlbnRzIDE2IDAgUiAvTWVkaWFCb3ggWyAwIDAgNDE5LjUyNzYgNTk1LjI3NTYgXSAvUGFyZW50IDEyIDAgUiAvUmVzb3VyY2VzIDw8Ci9Gb250IDEgMCBSIC9Qcm9jU2V0IFsgL1BERiAvVGV4dCAvSW1hZ2VCIC9JbWFnZUMgL0ltYWdlSSBdCj4+IC9Sb3RhdGUgMCAvVHJhbnMgPDwKCj4+IAogIC9UeXBlIC9QYWdlCj4+CmVuZG9iago5IDAgb2JqCjw8Ci9Db250ZW50cyAxNyAwIFIgL01lZGlhQm94IFsgMCAwIDQxOS41Mjc2IDU5NS4yNzU2IF0gL1BhcmVudCAxMiAwIFIgL1Jlc291cmNlcyA8PAovRm9udCAxIDAgUiAvUHJvY1NldCBbIC9QREYgL1RleHQgL0ltYWdlQiAvSW1hZ2VDIC9JbWFnZUkgXQo+PiAvUm90YXRlIDAgL1RyYW5zIDw8Cgo+PiAKICAvVHlwZSAvUGFnZQo+PgplbmRvYmoKMTAgMCBvYmoKPDwKL1BhZ2VNb2RlIC9Vc2VOb25lIC9QYWdlcyAxMiAwIFIgL1R5cGUgL0NhdGFsb2cKPj4KZW5kb2JqCjExIDAgb2JqCjw8Ci9BdXRob3IgKEFubmEgTXVzdGVyKSAvQ3JlYXRpb25EYXRlIChEOjIwMjYwOTMwMDcyMDI4KzAwJzAwJykgL0NyZWF0b3IgKGFub255bW91cykgL0tleXdvcmRzICgpIC9Nb2REYXRlIChEOjIwMjYwOTMwMDcyMDI4KzAwJzAwJykgL1Byb2R1Y2VyIChSZXBvcnRMYWIgUERGIExpYnJhcnkgLSBcKG9wZW5zb3VyY2VcKSkgCiAgL1N1YmplY3QgKHVuc3BlY2lmaWVkKSAvVGl0bGUgKEdydW5kbGFnZW4gZGVyIE9yZ2FuaXNhdGlvbnNrb21tdW5pa2F0aW9uKSAvVHJhcHBlZCAvRmFsc2UKPj4KZW5kb2JqCjEyIDAgb2JqCjw8Ci9Db3VudCA1IC9LaWRzIFsgNSAwIFIgNiAwIFIgNyAwIFIgOCAwIFIgOSAwIFIgXSAvVHlwZSAvUGFnZXMKPj4KZW5kb2JqCjEzIDAgb2JqCjw8Ci9GaWx0ZXIgWyAvQVNDSUk4NURlY29kZSAvRmxhdGVEZWNvZGUgXSAvTGVuZ3RoIDMwMQo+PgpzdHJlYW0KR2FyVzNdaFpJIShlKzBfYD5zTkdxIiU7QE4pWk4mKztSYi8tKSsvci0/NHMtb19FSjk8QzdMKFpLKk9uVU42YCgqUW4rWCYkLj8oMlpzYnQlN2kyV3FoZiR1Yi4uS2UzTm5nW2s0RkclNjg6YzpUUy1wT2VFTGIwXTtIM1RdTTY8LWldWldMcDBpdDtCOkwpRi9EdWIkUzgvNEBCIjQwZUtsJ29bPmVwJyFHXEw0IzZXUmM1KDNGRS1hJ0JfYDpsa1NlTEEnIWc7dCtYUWgwTVgoamRDLjdWSWchRyQtP2dkQ1pnSkpHTVVCW0EtXXBTL14iYTBSKmdVVWBILSVaZ1gyVzUvcUVFNEZlKG5rLjgoRSlgZGVSYXJebjltM0dlXT5gcCpkYjJLNzF+PmVuZHN0cmVhbQplbmRvYmoKMTQgMCBvYmoKPDwKL0ZpbHRlciBbIC9BU0NJSTg1RGVjb2RlIC9GbGF0ZURlY29kZSBdIC9MZW5ndGggODA2Cj4+CnN0cmVhbQpHYXMxXWJBUSZnJkE3MFZwPUwuWy5aJzw+KnRwSiJKSk1wXSNYJj0pZC5VKEAsPmVYZTI7a1wsWHMxbyZEJkVOZE87KT4/QjRkUHM5WVktOWh0LXBDJ24ja0A1YSJINjZdc2tVPDhaWi5cZig1R1BZalVjYCkxaEE4MSc6ay4mLz1IK1lRNkowKEsoRCpvP2leaixFVy82JD0iYmRGdUYrJURJVl8yY0xtVVRbU2ZGTzJ1U1RIKCg/aiReY0whL1hoMF82XG91NEsocmFtV0tpYEQlR0pOKUlJRlJpKS0/aTonQVcia2dNJ1ZsLGFYZVUxLEFCaFlSXydNWGdIZmglVEV0MFk/Y3FEaFA5XmsiQV1BO1I6ZXQoZ2FddUBsImVwRClzRXF1SypMYk5oJjN0QUQuRUtdYTdBRXVwQmlNO2dOaVFWZCRATlxZbHNHJ1hNYztlJzVZLGo9W2twZGk+SW46XV8iP0JOVi1EJXI0bEpQMHInZyRRKlRJTWt0J1NqQzFXQTM/O1A/XHA9O2dLXWsmXkYyTD0kVylNPWYoU20oI0RYbGcoZk1tKnFXVk5uUUEjLlomLiRNSTBDaSU8U0k7WyhEbFRIOSdYVyMrTUhwaD5IYiJfdGJAJyJIMSZwLjBkRkIxV3VrOmUxNz5YPGw5ZVxxciY3J0llaUxpOT9mQSdFSVFfbkxRLUxZWWddN0NcU1sibzFlRk1PMDQ/bGI1PXFMU3NCVmZRXE5WdSlRPGoyXTtCW2hTMG1EaiZxamJSWU1fJyMxUlhjL2o4bk4wb2I4QyNGLkY2SEdaKWcvTFovaTVXPV8+VGpjcVRIP3RtZm4zZjtVJ2M/LkQ/QzFlUU1KPEhfMCVHLE89bCQ+JWtDXmtmNUQkISpAPU5Vb0VYYFRWQU9vMi5iSUZ0NVxJMkVMNC5IYWdZNmA4K0trYGxdMSVnZCpEQFhCJVJsbUtQTFUqc2M2aV9fWVdMNl1cZV4tV0otYlMwITNaYE1XUSo/ZmIoOGNzZDxObT05KmpuLCgwa08yUm1NXlY9ZyNwTEZRUEMqdHRMUlokZkcwLTZ+PmVuZHN0cmVhbQplbmRvYmoKMTUgMCBvYmoKPDwKL0ZpbHRlciBbIC9BU0NJSTg1RGVjb2RlIC9GbGF0ZURlY29kZSBdIC9MZW5ndGggODEyCj4+CnN0cmVhbQpHYXMxXWdNWUoqJ1JdJ29jNkp1a2liUCZTLmJaKCEhZUkkdUlHKVFacDYsKTBnLlIlZ291cmwzRyNfRi9NWDRYO2JhRmw/MlBwWSxuYkJsYE0oVTwpSFE/JVQ6dDhDNDcyXSp0bClLJWFZLD41Z3E3KlxjUCVjLilARGtTUEFVLWptT1tkR0owPCIxI2pZJk87I2dccm1aTGpdaSpQQyhwLyNuJXNvbS1mT2JeXDg6PCc4LkYoUi08QyJGSG5zP1FcXmFBUyxdMURIVCMwbUIjP247Kj5iPzYmMSMvblxGNC45cEtbcko+SGxMUiFGXTZgdFNHUmRnQFwvRSxzPClVT0xbS2BfZGpgWk42LzFaTDpwZEY9VSdbWzpJSjU5dUhDZ1pQOyktM0RuUmFHaG5QUFJ1WGo3Wy5BVjA0PWBqSTJOJDwmOSM/YnBXTVhtbm1MMjplY1ZUaV5vMzo3ITQuSitEIWwjTToqb2FbSD9WYyIzVVpgLF1NUGZMQ247XCI4ZS9cRlpVZHVtYTxZTlVKUXBTJC1eKT9IMj4mIjhsK3BKJmw0N1pNTTFeJ0xtM3VWa1FnOUZVYDU5aERGTCMjKElRNWA0QlBfKmMlOVUlSlBTUFVyK1w0OU1iSzdkLGtLZDAqK2gtSElcKUJFamkuJUAmTlY2Mic+IVNCUmk9OjpBLEFDWWE2VyVoX180LzE+Ozk7cGlCIzsyPCJhSWMqTlI+JkAyX1wiXT9UYmxaRkg0cHR0TD4sODtwUzRQT2pPRzxgZjVRckhIMilWIkdkLSthZCVZK0RWVzFnMUAwIm8oJFxsMU9rUk1JdWRcPiksPyRuUXBGPlpfZjRjNmw0UmYtcG9mXmpqI1VnQ3NJWV06I0UwSmBELSgzcmtlKltvaF4ma0dSOnEuLWZEMiRcVlxMQF5pcTg+LigsaEMmQ15SUWIqcktcOkgmTjphZU9HM0BoTk8hO1JoUz4qcUpfJFsqPmxATkFSR0BSVGAnb1ppRko/LzI4NSJuMig7WFA2IW9ecXVgU2FPSmZsLnFVVWRWJzVqLSlITylLSyhWdGtOVHJtTEUyZiV+PmVuZHN0cmVhbQplbmRvYmoKMTYgMCBvYmoKPDwKL0ZpbHRlciBbIC9BU0NJSTg1RGVjb2RlIC9GbGF0ZURlY29kZSBdIC9MZW5ndGggNjkyCj4+CnN0cmVhbQpHYXMxXT8jLzFbJjpEZy1mWjFHMVdfUFRYbm1iQi07VlkudSwoXGE/WmFIKVc1K1RvRyxgbEJqNGtYM1xmMSJWUVBCVVZeQWtpRCpJYDIjbm0vYE0xSSFIOEcxOG9DPkEwUmBIIVZjOUNHYi45ZiddWSouYWopUVgjdClxOzZsJExPby90LjtATGRNaysuZ2kqV3JhMjlnOy5dTEQ/dEVEKy8rLjdxVTVTOTBvc3NpMTtDZ107Q0pqMSUvWiJxYUVZJnJANVtcKjBYT29RInA1Z20lPTJdUEs4M2hRZVlEWyhKZGttc1swaURMUWRlcTgrakw0L2xiJklqVHBDc24lSTYsME9obi1qVy0nZTIhXkZkV10wWiI4TlxiP046YFMuQmNRPks1MmVoP0k0T15OJEdUN042RCZkMT5oSjUoJlQlSCNBQT09Qz9KUGVuND06WDIpNDEvU0xnQj8nRkoqSlI4cUlObEJhO2w7ZGFbPi07LEotMiUnKXNpKltVZFZeI2ouJmclNDc6XDNcLzFhLWcpQWdAWm9cbyIiUiJTTj9dTjdCcnBHO1dKdTdDXSw7InI1aVI7SWVBJGRqXzs6SiktUSpRKyFPWnJzVVotVXA6PXNRMGJYMUcsU0tCSE9QWV41KjRbS1ZwVy8jXzhTQTNrbVI4KVxxLkJUIzVBXFwuWjF0Rys3PlQpUTMySmJKLGcySyRpXWBSWzBERUJcXWFFXF8zOVtfclpFUGliOTYrUCpSMUsibDpCOnFgQjdtNzxBYXUkQWlEUltvZm0mOGIzaCI7dG9pWEssSVw2dGgmakdYLFY7bF5TRzZgYUlGTGZxbUdDKDpESmxHL1w6K1BGWmI4O0I+WlI2OCMsPkZba2xlTVVRc2siLiZuJE0mPCInWkZOOiVzTkwoUVRlLVZ+PmVuZHN0cmVhbQplbmRvYmoKMTcgMCBvYmoKPDwKL0ZpbHRlciBbIC9BU0NJSTg1RGVjb2RlIC9GbGF0ZURlY29kZSBdIC9MZW5ndGggNTExCj4+CnN0cmVhbQpHYXMyRjk1Zz1jJjs5Tk8nbTRWbVFuVVg3ZyJeQ1RJO3IiP25nVG8uQlNPVj1fZUw2IWFoTCJBQ0M/QWQvTDYhX2VeckAlYyZmciNjMG82RW1WNy1hQjQpVkIlXWkyLmVBJjVnWU5HakZXaGMtbUJwKCVPcDtVTFE4ckJvQGFuJGU0UFQ5QEhsWSFOW01FaEE0NCQ4W0lBJD9EajYyXyZdZitnPiVjZzM0QVFnP0lyUj9cMFJLcmM9SVIwNCUkM0FRQTAoa1BUaWlSTVY3UzQ/NVQoT0QsVSkoIUNWUGtoNkNSYSdMJV46LUYsZTZDR1BvRlgsZ1RDYzVYR1AlbzYlbjtgWEwvbm1tN2YrQENmUFZLJlVuMTpKZF1xN0g0XGlpJUVMLVhqSCVyJXMtMkxRWTRKTnVLZV9cM0NWRV1FQ2E1YDtoLWVzR09NRVJbMVNTbmlzUnNVT15cYlhsImhfK2okJ09BcGIoazNJK2Y8R1hNKypgW0FAQTo9TXEpU1NVIU9sNl5kXDBudGNPNVNUbmdGcERgRzpSKFZFKDZcJTBuITc/SyU+WkZQVjtSJlxrWmxxK2huQ1dzczU9bFxUIj9DVm5CbHBlQGJPPjl0NFlpKjtrLzhoTWM6cWZedUxqVl9aRVN0bXBAT0pkLkVgbV4xbz0rOjY4O1g1Sn4+ZW5kc3RyZWFtCmVuZG9iagp4cmVmCjAgMTgKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDYxIDAwMDAwIG4gCjAwMDAwMDAxMTIgMDAwMDAgbiAKMDAwMDAwMDIxOSAwMDAwMCBuIAowMDAwMDAwMzI3IDAwMDAwIG4gCjAwMDAwMDA0MzYgMDAwMDAgbiAKMDAwMDAwMDY0MSAwMDAwMCBuIAowMDAwMDAwODQ2IDAwMDAwIG4gCjAwMDAwMDEwNTEgMDAwMDAgbiAKMDAwMDAwMTI1NiAwMDAwMCBuIAowMDAwMDAxNDYxIDAwMDAwIG4gCjAwMDAwMDE1MzEgMDAwMDAgbiAKMDAwMDAwMTgyOCAwMDAwMCBuIAowMDAwMDAxOTEyIDAwMDAwIG4gCjAwMDAwMDIzMDQgMDAwMDAgbiAKMDAwMDAwMzIwMSAwMDAwMCBuIAowMDAwMDA0MTA0IDAwMDAwIG4gCjAwMDAwMDQ4ODcgMDAwMDAgbiAKdHJhaWxlcgo8PAovSUQgCls8YWY3OGQ4ZmNiMmU3YTU5OGJkNmQ2MTc0YzBiZWM1NDY+PGFmNzhkOGZjYjJlN2E1OThiZDZkNjE3NGMwYmVjNTQ2Pl0KJSBSZXBvcnRMYWIgZ2VuZXJhdGVkIFBERiBkb2N1bWVudCAtLSBkaWdlc3QgKG9wZW5zb3VyY2UpCgovSW5mbyAxMSAwIFIKL1Jvb3QgMTAgMCBSCi9TaXplIDE4Cj4+CnN0YXJ0eHJlZgo1NDg5CiUlRU9GCg=='/*DEMO_PDF_END*/;
 
 function b64ToBytes(b64) {
   const bin = atob(b64);
@@ -2124,6 +2206,7 @@ async function loadDemo() {
    ============================================================ */
 function wireUi() {
   $('#thesis-file').addEventListener('change', e => { const f = e.target.files[0]; if (f) onThesisFile(f); e.target.value = ''; });
+  $('#update-file').addEventListener('change', e => { const f = e.target.files[0]; if (f) onThesisFile(f); e.target.value = ''; });
   $('#thesis-text-apply').addEventListener('click', () => {
     const text = $('#thesis-text').value;
     if (!text.trim()) { $('#thesis-status').textContent = 'Bitte zuerst Text einfügen.'; return; }

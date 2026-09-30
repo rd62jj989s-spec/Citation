@@ -7,6 +7,7 @@ Ergebnis im Ordner samples/:
   Beispiel_2019_Digitale_Oeffentlichkeiten.pdf  Zeitschriftenartikel, Seitenzahl oben rechts, S. 41 bis 44
   masterarbeit_beispiel.docx                   Beispielarbeit mit APA-7-Belegen
   masterarbeit_beispiel.pdf                    dieselbe Arbeit als PDF
+  masterarbeit_beispiel_v2.docx                korrigierte Fassung zum Test von „Aktualisieren“
 """
 
 import os
@@ -266,12 +267,24 @@ THESIS = [
 ]
 
 
-def make_thesis_docx(path):
+# Korrigierte Fassung: Wortlaut und zwei Seitenangaben berichtigt
+THESIS_V2 = [
+    (
+        kind,
+        text.replace("„frühzeitig in Entscheidungsprozesse eingebunden werden“ (Muster, 2021, S. 157)", "„frühzeitig in Entscheidungsprozesse eingebunden werden“ (Muster, 2021, S. 158)")
+        .replace("glaubhaften Außendarstellung", "glaubwürdigen Außendarstellung")
+        .replace("Handlungsfähigkeit verloren“ (Muster, 2021, S. 159)", "Handlungsfähigkeit verloren“ (Muster, 2021, S. 159–160)"),
+    )
+    for kind, text in THESIS
+]
+
+
+def make_thesis_docx(path, content=THESIS):
     doc = Document()
     style = doc.styles["Normal"]
     style.font.name = "Liberation Sans"
     style.font.size = Pt(11)
-    for kind, text in THESIS:
+    for kind, text in content:
         if kind == "h":
             doc.add_heading(text, level=1)
         elif kind == "q":
@@ -293,6 +306,7 @@ def main():
     make_article_pdf(os.path.join(OUT, "Beispiel_2019_Digitale_Oeffentlichkeiten.pdf"))
     make_thesis_docx(os.path.join(OUT, "masterarbeit_beispiel.docx"))
     make_thesis_pdf(os.path.join(OUT, "masterarbeit_beispiel.pdf"))
+    make_thesis_docx(os.path.join(OUT, "masterarbeit_beispiel_v2.docx"), THESIS_V2)
     print("Beispieldateien erstellt in", OUT)
 
 

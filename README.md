@@ -30,6 +30,13 @@ Zusätzlich meldet das Programm:
 3. Unter „Zuordnung“ prüfen, ob jedes zitierte Werk die richtige PDF hat. Eindeutige Fälle ordnet das Programm selbst zu, zum Beispiel über den Dateinamen „Muster_2021_Titel.pdf“.
 4. Unter „Ergebnis“ die Befunde durchgehen. Mit „Probleme“ werden nur die Fälle gezeigt, die Aufmerksamkeit brauchen.
 
+## Aktualisieren
+
+Es gibt zwei Knöpfe „Aktualisieren“:
+
+1. Oben im Ergebnis: Hier wählst du eine neue Fassung deiner Arbeit aus, zum Beispiel nachdem du Zitate korrigiert hast. Quellen und Zuordnungen bleiben erhalten. Danach steht dort, wie viele Probleme es vorher gab und wie viele jetzt noch.
+2. Auf jeder Karte, bei der ein Zitat nicht gefunden wurde, keine PDF zugeordnet ist oder die angegebene Seite in der PDF fehlt: Hier wählst du die richtige PDF für genau dieses Werk aus. Sie wird geladen, dem Werk zugeordnet, und alle Belege dieses Werks werden neu geprüft.
+
 ## Seitenzahlen
 
 Seitenangaben werden als gedruckte Buchseiten gelesen, nicht als PDF-Seiten. Das Programm erkennt die Buchseiten auf drei Wegen, in dieser Reihenfolge:
@@ -56,7 +63,7 @@ Im Ordner `tests` liegen erfundene Beispieldateien und ein automatischer Browser
 cd tests
 npm install
 pip install reportlab python-docx
-python3 make_samples.py    # Beispielquellen und Beispielarbeit erzeugen
+python3 make_samples.py    # Beispielquellen und Beispielarbeit (auch korrigierte Fassung) erzeugen
 python3 embed_demo.py      # Beispiel-PDF in die Seite einbetten
 node e2e.mjs               # Test in Chromium, Bilder landen in tests/out
 ```

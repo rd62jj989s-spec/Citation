@@ -96,18 +96,24 @@ const browser = await chromium.launch();
   await context.close();
 }
 
-// 2. Word-Datei und zwei Quellen
+// 2. Word-Datei, zunächst nur eine Quelle, die zweite kommt über „Aktualisieren“ auf der Karte
 {
   const { page, context, errors } = await newPage(browser);
   await waitReady(page, 8);
   await page.setInputFiles('#thesis-file', path.join(SAMPLES, 'masterarbeit_beispiel.docx'));
-  await page.setInputFiles('#source-files', [
-    path.join(SAMPLES, 'Muster_2021_Organisationskommunikation.pdf'),
-    path.join(SAMPLES, 'Beispiel_2019_Digitale_Oeffentlichkeiten.pdf'),
-  ]);
-  await page.waitForFunction(() => document.querySelector('#source-status').textContent.includes('2 Quellen geladen'), null, { timeout: 60000 });
+  await page.setInputFiles('#source-files', [path.join(SAMPLES, 'Muster_2021_Organisationskommunikation.pdf')]);
+  await page.waitForFunction(() => document.querySelector('#source-status').textContent.includes('1 Quelle geladen'), null, { timeout: 60000 });
   await waitReady(page, 10);
+  const before = await cards(page);
+  expect('Karte: vorher ohne PDF', before[11].status, 'Keine PDF zugeordnet');
+  const card11 = page.locator('#results li.card').nth(11);
+  expect('Karte: Aktualisieren-Knopf vorhanden', await card11.locator('label.btn', { hasText: 'Aktualisieren' }).count(), 1);
+  await card11.locator('input[type=file]').setInputFiles(path.join(SAMPLES, 'Beispiel_2019_Digitale_Oeffentlichkeiten.pdf'));
+  await page.waitForFunction(() => /Aktualisiert um .*Beispiel \(2019\)/.test(document.querySelector('#update-status').textContent), null, { timeout: 60000 });
+  await waitReady(page, 10);
+  console.log('  ' + await page.$eval('#update-status', el => el.textContent));
   const cs = await cards(page);
+  expect('Karte: danach bestätigt und gekennzeichnet', [cs[11].status, await page.locator('#results li.card').nth(11).innerText().then(t => t.includes('Gerade aktualisiert'))], ['Bestätigt', true]);
   cs.forEach((c, i) => console.log(`  [${i}] ${c.status} | ${c.beleg}`));
   const expected = [
     'Bestätigt', 'Bestätigt', 'Bestätigt', 'Seitenangabe prüfen', 'Wortlaut weicht ab', 'Seitenangabe prüfen', 'Bestätigt',
@@ -127,6 +133,15 @@ const browser = await chromium.launch();
   await showPages(page, 12, 'word_artikel.png');
   await page.screenshot({ path: path.join(OUT, 'word_seite.png'), fullPage: true });
   expect('Word: keine Konsolenfehler', errors, []);
+
+  // Korrigierte Fassung über den Aktualisieren-Knopf im Ergebnis
+  await page.setInputFiles('#update-file', path.join(SAMPLES, 'masterarbeit_beispiel_v2.docx'));
+  await page.waitForFunction(() => /Aktualisiert mit masterarbeit_beispiel_v2/.test(document.querySelector('#update-status').textContent), null, { timeout: 60000 });
+  const upd = await page.$eval('#update-status', el => el.textContent);
+  console.log('  ' + upd);
+  expect('Aktualisieren: Vergleich vorher und nachher', /Probleme vorher 4, jetzt 1\. Bestätigt vorher 6, jetzt 9\./.test(upd), true);
+  const cv2 = await cards(page);
+  expect('Aktualisieren: korrigierte Belege bestätigt', [cv2[3].status, cv2[4].status, cv2[5].status], ['Bestätigt', 'Bestätigt', 'Bestätigt']);
 
   // Quellen bleiben nach dem Neuladen erhalten
   await page.reload();
